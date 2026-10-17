@@ -341,11 +341,11 @@ list) · [roadmap.md](docs/roadmap.md) (milestones, plan) · [parity-checklist.m
 [control-protocol.md](docs/control-protocol.md) · CJK: [cjk.md](docs/cjk.md),
 [cjk-typography.md](docs/cjk-typography.md) · Arabic: [arabic-typography.md](docs/arabic-typography.md)
 
-## Progress log
-
 2026-10-16: Linux desktop builds enable Adwaita vector window controls without
 bundling a title font. See README → Linux window controls for platform selection;
 full GTK theme parity is not claimed.
+
+## Progress log
 
 - **2026-10-13** · Switching between document and parent pages refreshes the canvas immediately, preventing black parent pages and stale document objects when the zoom stays the same. Ordinary edits retain partial repainting. No readiness percentage change.
 
