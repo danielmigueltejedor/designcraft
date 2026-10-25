@@ -233,6 +233,34 @@ impl Exporter<'_> {
         }
     }
 
+    /// One line's glyphs as tagged runs; a glyph that is turned or slanted gets a transform of its own.
+    fn line_glyphs(&mut self, s: &mut Surface, cs: &ComposedStory, ft: &FrameText, l: &designcraft_compose::Line, story: &str) {
+        let gs = &l.glyphs;
+        let mut i = 0;
+        while i < gs.len() {
+            let g = &gs[i];
+            if !g.visible || g.sx <= 0.0 || g.sy <= 0.0 {
+                i += 1;
+                continue;
+            }
+            // Vertical type: an upright glyph turns back a quarter about its em box centre.
+            // Shatai slants each glyph about its own em box centre first.
+            let turn = if ft.vertical { g.vertical_xf(l.baseline) } else { None };
+            let shatai = cs.styles.get(g.style as usize).and_then(|st| st.shatai_xf(g, l.baseline));
+            if turn.is_some() || shatai.is_some() {
+                let m = turn.unwrap_or(Affine::IDENTITY) * shatai.unwrap_or(Affine::IDENTITY);
+                s.push_transform(&crate::export::tf(m));
+                self.tagged_run(s, cs, &gs[i..i + 1], l.baseline, story);
+                s.pop();
+                i += 1;
+                continue;
+            }
+            let j = run_end(ft, gs, i);
+            self.tagged_run(s, cs, &gs[i..j], l.baseline, story);
+            i = j;
+        }
+    }
+
     pub(crate) fn frame_text(&mut self, s: &mut Surface, cs: &ComposedStory, ft: &FrameText, story: &str) {
         // Paragraph shading and rules under the text.
         self.as_artifact(s, |me, s| {
@@ -260,30 +288,7 @@ impl Exporter<'_> {
             });
         }
         for l in &ft.lines {
-            let gs = &l.glyphs;
-            let mut i = 0;
-            while i < gs.len() {
-                let g = &gs[i];
-                if !g.visible || g.sx <= 0.0 || g.sy <= 0.0 {
-                    i += 1;
-                    continue;
-                }
-                // Vertical type: an upright glyph turns back a quarter about its em box centre.
-                // Shatai slants each glyph about its own em box centre first.
-                let turn = if ft.vertical { g.vertical_xf(l.baseline) } else { None };
-                let shatai = cs.styles.get(g.style as usize).and_then(|st| st.shatai_xf(g, l.baseline));
-                if turn.is_some() || shatai.is_some() {
-                    let m = turn.unwrap_or(Affine::IDENTITY) * shatai.unwrap_or(Affine::IDENTITY);
-                    s.push_transform(&crate::export::tf(m));
-                    self.tagged_run(s, cs, &gs[i..i + 1], l.baseline, story);
-                    s.pop();
-                    i += 1;
-                    continue;
-                }
-                let j = run_end(ft, gs, i);
-                self.tagged_run(s, cs, &gs[i..j], l.baseline, story);
-                i = j;
-            }
+            self.line_glyphs(s, cs, ft, l, story);
         }
         self.as_artifact(s, |me, s| {
             for (rule, r) in text_rules(cs, ft, false) {
@@ -303,32 +308,43 @@ impl Exporter<'_> {
         });
     }
 
+    /// One table cell's graphic, or its text composed in the cell's own area.
+    fn table_cell(&mut self, s: &mut Surface, c: &designcraft_compose::PlacedCell) {
+        if let Some(g) = &c.graphic {
+            if let Some(clip) = to_path(&c.clip.to_path(0.1)) {
+                s.push_clip_path(&clip, &krilla::paint::FillRule::NonZero);
+                s.push_transform(&tf(Affine::translate((c.clip.x0, c.clip.y0))));
+                self.graphic(s, g, None);
+                s.pop();
+                s.pop();
+            }
+        } else if let Some(cft) = c.text.frames.first() {
+            s.push_transform(&tf(Affine::translate(c.origin.to_vec2())));
+            let area = std::mem::replace(&mut self.text_area, lines_area(cft));
+            self.frame_text(s, &c.text, cft, &c.source);
+            self.text_area = area;
+            s.pop();
+        }
+    }
+
     /// Table fragments: cell fills, cell text (real text), edges and the border.
     fn tables(&mut self, s: &mut Surface, ft: &FrameText) {
         for t in &ft.tables {
             for c in &t.cells {
-                if let Some((sw, tint)) = &c.fill
-                    && let Some(col) = self.swatch_color(sw, *tint)
-                {
-                    self.fill_rect(s, c.rect, col);
+                if let Some((sw, tint)) = &c.fill {
+                    let fill = designcraft_doc::Fill { swatch: sw.clone(), tint: *tint, ..designcraft_doc::Fill::none() };
+                    if let Some(paint) = self.fill_paint(&fill, t.rect)
+                        && let Some(path) = to_path(&c.rect.to_path(0.1))
+                    {
+                        s.set_stroke(None);
+                        s.set_fill(Some(paint_fill(paint)));
+                        s.draw_path(&path);
+                        s.set_fill(None);
+                    }
                 }
             }
             for c in &t.cells {
-                if let Some(g) = &c.graphic {
-                    if let Some(clip) = to_path(&c.clip.to_path(0.1)) {
-                        s.push_clip_path(&clip, &krilla::paint::FillRule::NonZero);
-                        s.push_transform(&tf(Affine::translate((c.clip.x0, c.clip.y0))));
-                        self.graphic(s, g);
-                        s.pop();
-                        s.pop();
-                    }
-                } else if let Some(cft) = c.text.frames.first() {
-                    s.push_transform(&tf(Affine::translate(c.origin.to_vec2())));
-                    let area = std::mem::replace(&mut self.text_area, lines_area(cft));
-                    self.frame_text(s, &c.text, cft, &c.source);
-                    self.text_area = area;
-                    s.pop();
-                }
+                self.table_cell(s, c);
             }
             for seg in &t.strokes {
                 let st = &seg.stroke;

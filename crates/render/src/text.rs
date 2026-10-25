@@ -156,6 +156,22 @@ fn union(r: Option<Rect>, b: Rect) -> Option<Rect> {
     Some(r.map_or(b, |r| r.union(b)))
 }
 
+/// Add a rule bar, joined onto the previous one when it continues the same stretch.
+fn push_bar(bars: &mut Vec<(String, f32, Rect)>, color: &str, tint: f32, r: Rect) {
+    match bars.last_mut() {
+        Some((c, t, last))
+            if c.as_str() == color
+                && *t == tint
+                && (last.y0 - r.y0).abs() < 1e-6
+                && (last.y1 - r.y1).abs() < 1e-6
+                && (r.x0 - last.x1).abs() < 0.5 =>
+        {
+            last.x1 = last.x1.max(r.x1);
+        }
+        _ => bars.push((color.to_owned(), tint, r)),
+    }
+}
+
 fn build_line(db: &FontDb, cs: &ComposedStory, l: &Line, vertical: bool) -> LineGlyphs {
     let mut runs: Vec<(u32, BezPath)> = Vec::new();
     let mut underlines: Vec<(String, f32, Rect)> = Vec::new();
@@ -171,18 +187,7 @@ fn build_line(db: &FontDb, cs: &ComposedStory, l: &Line, vertical: bool) -> Line
                 let r = rule.rect(g.x, g.x + g.adv, designcraft_compose::rule_baseline(style, l, g));
                 // One bar per stretch, as the PDF export draws them: a bar per glyph left
                 // anti-aliased seams between the letters.
-                match bars.last_mut() {
-                    Some((color, tint, last))
-                        if *color == rule.color
-                            && *tint == rule.tint
-                            && (last.y0 - r.y0).abs() < 1e-6
-                            && (last.y1 - r.y1).abs() < 1e-6
-                            && (r.x0 - last.x1).abs() < 0.5 =>
-                    {
-                        last.x1 = last.x1.max(r.x1);
-                    }
-                    _ => bars.push((rule.color.clone(), rule.tint, r)),
-                }
+                push_bar(bars, &rule.color, rule.tint, r);
             }
         }
         // A tab carries the rule across its width but draws nothing itself.
@@ -465,14 +470,16 @@ impl Renderer {
         let doc = f.doc;
         for t in &ft.tables {
             for c in &t.cells {
-                if let Some((sw, tint)) = &c.fill
-                    && let Some(col) = doc.resolve_color(sw, *tint)
-                {
+                if let Some((sw, tint)) = &c.fill {
                     ctx.set_transform(f.view * xf);
-                    ctx.set_paint(color_of(&col, 1.0));
+                    let fill = designcraft_doc::Fill { swatch: sw.clone(), tint: *tint, ..designcraft_doc::Fill::none() };
                     // Overlap neighbours by half a device pixel so adjacent fills show no seams.
                     let h = 0.5 * f.px;
-                    ctx.fill_rect(&c.rect.inflate(h, h));
+                    // All cells share the table's gradient space; it must not restart at a cell edge.
+                    if crate::set_fill_paint(ctx, doc, &fill, t.rect) {
+                        ctx.fill_rect(&c.rect.inflate(h, h));
+                    }
+                    ctx.reset_paint_transform();
                 }
             }
             for c in &t.cells {

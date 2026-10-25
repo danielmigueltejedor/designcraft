@@ -142,7 +142,6 @@ if has appimage; then
   esac
   APPDIR="$WORK/DesignCraft.AppDir"
   cp -R "$STAGE" "$APPDIR"
-  mv "$APPDIR/usr/share/doc" "$WORK/doc-unused"
   # Keep sctk-adwaita's MIT notice in the AppImage.
   install -Dm644 "$ROOT/NOTICE" "$APPDIR/usr/share/doc/designcraft/NOTICE"
   ln -s usr/bin/designcraft "$APPDIR/AppRun"
